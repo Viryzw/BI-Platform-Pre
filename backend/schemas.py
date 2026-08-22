@@ -172,6 +172,10 @@ class MetricCreate(MetricBase):
 class MetricUpdate(MetricBase):
     pass
 
+
+class MetricDashboardUpdate(BaseModel):
+    dashboard_enabled: bool
+
 class MetricResponse(MetricBase):
     id: int
     definition_id: Optional[int] = None

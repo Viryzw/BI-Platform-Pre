@@ -2419,6 +2419,29 @@ select:focus-visible {
   color: #5e6b7f;
 }
 
+.metric-dashboard-toggle {
+  border: 0;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: box-shadow 160ms ease, filter 160ms ease, transform 160ms ease;
+}
+
+.metric-dashboard-toggle:hover:not(:disabled) {
+  filter: brightness(.97);
+  transform: translateY(-1px);
+}
+
+.metric-dashboard-toggle:focus-visible {
+  outline: 2px solid rgba(49, 87, 213, .34);
+  outline-offset: 2px;
+}
+
+.metric-dashboard-toggle:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
 .tag.warning {
   background: var(--warning-soft);
   color: var(--warning);

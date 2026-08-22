@@ -491,6 +491,15 @@ def update_metric(db: Session, metric_id: int, metric: schemas.MetricUpdate):
         db.refresh(db_metric)
     return db_metric
 
+
+def update_metric_dashboard_enabled(db: Session, metric_id: int, dashboard_enabled: bool):
+    db_metric = get_metric(db, metric_id)
+    if db_metric:
+        db_metric.dashboard_enabled = dashboard_enabled
+        db.commit()
+        db.refresh(db_metric)
+    return db_metric
+
 def delete_metric(db: Session, metric_id: int):
     db_metric = get_metric(db, metric_id)
     if db_metric:

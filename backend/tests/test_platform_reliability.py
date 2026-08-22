@@ -230,6 +230,36 @@ class MetricCatalogModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             crud.create_metric(self.db, self._payload(self.first_source.id, "SUM(total)"))
 
+    def test_dashboard_status_can_be_updated_without_rewriting_metric_definition(self):
+        metric = crud.create_metric(self.db, self._payload(self.first_source.id, "SUM(amount)"))
+        original_definition_id = metric.definition_id
+
+        updated = crud.update_metric_dashboard_enabled(self.db, metric.id, False)
+
+        self.assertFalse(updated.dashboard_enabled)
+        self.assertEqual(updated.definition_id, original_definition_id)
+        self.assertEqual(updated.sql_expr, "SUM(amount)")
+
+    def test_dashboard_loader_excludes_disabled_metrics(self):
+        disabled = crud.create_metric(self.db, self._payload(self.first_source.id, "SUM(amount)"))
+        enabled = crud.create_metric(
+            self.db,
+            schemas.MetricCreate(
+                name="订单量",
+                description="全部订单数量",
+                topic="销售经营",
+                sql_expr="COUNT(*)",
+                data_source_id=self.first_source.id,
+                unit="单",
+            ),
+        )
+        crud.update_metric_dashboard_enabled(self.db, disabled.id, False)
+
+        with patch.object(dashboard_router, "SessionLocal", side_effect=self.Session):
+            loaded = dashboard_router._load_metrics(self.first_source.id)
+
+        self.assertEqual([metric.id for metric in loaded], [enabled.id])
+
     def test_legacy_metrics_are_migrated_into_catalog(self):
         legacy_engine = create_engine(
             "sqlite://",

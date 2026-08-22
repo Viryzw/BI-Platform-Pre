@@ -1,3 +1,5 @@
+import { createClientId } from './client-id.js'
+
 const viewRoot = document.querySelector('#view-root')
 const pageTitle = document.querySelector('#page-title')
 const backendStatus = document.querySelector('#backend-status')
@@ -164,7 +166,7 @@ function storedDashboardPeriod() {
 
 function initialChatMessages() {
   return [{
-    id: crypto.randomUUID(),
+    id: createClientId(),
     role: 'assistant',
     text: '你好，我是 Atlas 数据分析助手。直接提出经营问题，我会结合业务指标和真实数据完成分析、图表和报告。'
   }]
@@ -181,6 +183,7 @@ const state = {
   dashboardError: '',
   dashboardLoading: false,
   dashboardInsightsLoading: false,
+  dashboardConfigurationStale: false,
   dashboardRequestId: 0,
   dashboardDataSources: structuredClone(demoRecords.datasources),
   selectedDataSourceId: storedDashboardDataSourceId(),
@@ -215,6 +218,7 @@ const state = {
   dataSourceImportUploadController: null,
   metricCatalogMode: window.localStorage.getItem('atlas-metric-catalog-mode') === 'metric' ? 'metric' : 'datasource',
   expandedMetricGroupKeys: [],
+  metricDashboardUpdatingIds: [],
   currentUserId: storedAuthUser()?.id || storedUserId(),
   currentConversationId: null,
   conversations: [],
@@ -284,6 +288,25 @@ function clearDashboardCache(key = null) {
     keys.forEach((candidate) => window.sessionStorage.removeItem(candidate))
   } catch {
     // Cache invalidation is best effort.
+  }
+}
+
+function invalidateDashboardConfiguration() {
+  clearDashboardCache()
+  state.dashboardRequestId += 1
+  state.dashboardLoading = false
+  state.dashboardInsightsLoading = false
+  state.dashboardConfigurationStale = true
+  state.dashboardDimensionValue = null
+  state.reportPreview = null
+  state.dashboard = {
+    ...state.dashboard,
+    kpis: [],
+    primaryMetric: null,
+    dimension: null,
+    trendData: { x: [], y: [] },
+    pieData: [],
+    insights: { status: 'pending', message: '正在按最新看板配置加载', items: [] }
   }
 }
 
@@ -842,7 +865,9 @@ function dashboardInsightsHtml(insights = {}) {
 }
 
 function normalizedDashboardKpis(data) {
-  if (Array.isArray(data.kpis) && data.kpis.length) return data.kpis
+  // Current dashboard responses always carry `kpis`, including an empty array.
+  // Only responses from the legacy fixed-card API need the compatibility fallback.
+  if (Array.isArray(data.kpis)) return data.kpis
   return [
     { name: '累计销售额', value: data.totalSales, unit: '¥', delta: data.deltas?.totalSales },
     { name: '订单总量', value: data.orderCount, unit: '单', delta: data.deltas?.orderCount },
@@ -964,7 +989,8 @@ async function loadDashboardSources() {
 }
 
 async function loadDashboardContext(showFeedback = false, force = false) {
-  if (state.dashboardLoading || state.dashboardInsightsLoading) return
+  // An older insight request must not block reloading KPI configuration.
+  if (state.dashboardLoading && !state.dashboardConfigurationStale) return
   state.dashboardLoading = true
   try {
     await Promise.all([loadDashboardSources(), loadEnterprises()])
@@ -975,6 +1001,7 @@ async function loadDashboardContext(showFeedback = false, force = false) {
       state.dashboard = structuredClone(cached)
       state.dashboardIsDemo = false
       state.dashboardError = ''
+      state.dashboardConfigurationStale = false
       state.dashboardLoading = false
       if (['dashboard', 'reports'].includes(state.view)) renderCurrentView()
       return
@@ -1025,7 +1052,7 @@ async function loadDashboard(showFeedback = false, force = false) {
     if (requestedDimension) baseParams.set('dimension_value', requestedDimension)
     const data = await apiRequest(`/api/dashboard/?${baseParams}`, { timeout: 20000 })
     if (requestId !== state.dashboardRequestId || requestedSourceId !== Number(state.selectedDataSourceId) || requestedPeriod !== state.dashboardPeriod || requestedDimension !== state.dashboardDimensionValue) return
-    state.dashboard = {
+      state.dashboard = {
       kpis: data.kpis || [],
       primaryMetric: data.primaryMetric || null,
       dimension: data.dimension || null,
@@ -1040,6 +1067,7 @@ async function loadDashboard(showFeedback = false, force = false) {
     }
     state.dashboardIsDemo = false
     state.dashboardError = ''
+    state.dashboardConfigurationStale = false
     state.dashboardLoading = false
     if (['dashboard', 'reports'].includes(state.view)) renderCurrentView()
     if (showFeedback) toast('当前数据源的看板数据已更新', 'success')
@@ -1988,8 +2016,8 @@ async function sendQuestion() {
     return
   }
 
-  state.messages.push({ id: crypto.randomUUID(), role: 'user', text: question, meta: currentTime() })
-  const loadingId = crypto.randomUUID()
+  state.messages.push({ id: createClientId(), role: 'user', text: question, meta: currentTime() })
+  const loadingId = createClientId()
   state.messages.push({ id: loadingId, role: 'assistant', loading: true, meta: '正在理解指标并查询数据' })
   state.chatLoading = true
   renderChat()
@@ -2174,6 +2202,14 @@ function recordSearchText(record) {
   return Object.values(record).join(' ').toLowerCase()
 }
 
+function metricDashboardToggle(record) {
+  const enabled = record.dashboard_enabled !== false
+  const updating = state.metricDashboardUpdatingIds.includes(Number(record.id))
+  const label = `${enabled ? '已用于看板' : '未用于看板'}${updating ? ' · 保存中' : ''}`
+  const nextLabel = enabled ? '未用于看板' : '已用于看板'
+  return `<button class="tag ${enabled ? 'success' : 'neutral'} metric-dashboard-toggle${updating ? ' is-updating' : ''}" type="button" data-toggle-metric-dashboard="${escapeHtml(record.id)}" aria-pressed="${enabled}" title="点击切换为${nextLabel}" ${updating ? 'disabled' : ''}>${label}</button>`
+}
+
 function renderMetricRow(record, source) {
   const dataSource = state.records.datasources.find(
     (item) => Number(item.id) === Number(record.data_source_id)
@@ -2189,7 +2225,7 @@ function renderMetricRow(record, source) {
         <div class="metric-source"><strong>${escapeHtml(dataSource?.name || `数据源 ${record.data_source_id}`)}</strong><span>ID ${escapeHtml(record.data_source_id)}</span></div>
       </td>
       <td class="metric-actions-cell">
-        ${record.dashboard_enabled === false ? '<span class="tag neutral">未用于看板</span>' : '<span class="tag success">已用于看板</span>'}
+        ${metricDashboardToggle(record)}
         ${rowActions('metrics', record.id, source)}
       </td>
     </tr>`
@@ -2230,7 +2266,7 @@ function metricBindingCard(record, source, mode) {
   return `<article class="metric-binding-card" data-search="${escapeHtml(recordSearchText(record))}">
     <div class="metric-binding-identity"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(subtitle)}</span></div>
     <div class="metric-binding-sql"><span>SQL</span><code>${escapeHtml(record.sql_expr || '—')}</code></div>
-    <div class="metric-binding-status">${record.dashboard_enabled === false ? '<span class="tag neutral">未用于看板</span>' : '<span class="tag success">已用于看板</span>'}</div>
+    <div class="metric-binding-status">${metricDashboardToggle(record)}</div>
     <div class="metric-binding-actions">${rowActions('metrics', record.id, source)}</div>
   </article>`
 }
@@ -3242,6 +3278,9 @@ function renderManagement(entity) {
       openRecordModal('metrics', null, defaults)
     })
   })
+  document.querySelectorAll('[data-toggle-metric-dashboard]').forEach((button) => {
+    button.addEventListener('click', () => toggleMetricDashboard(button.dataset.toggleMetricDashboard))
+  })
   document.querySelectorAll('[data-select-global-source]').forEach((button) => {
     button.addEventListener('click', () => {
       switchGlobalDataSource(button.dataset.selectGlobalSource, { feedback: true })
@@ -3256,6 +3295,45 @@ function renderManagement(entity) {
   document.querySelectorAll('[data-delete-knowledge]').forEach((button) => {
     button.addEventListener('click', () => deleteKnowledgeDocument(button.dataset.deleteKnowledge))
   })
+}
+
+async function toggleMetricDashboard(metricId) {
+  const numericId = Number(metricId)
+  const record = state.records.metrics.find((item) => Number(item.id) === numericId)
+  if (!record || state.metricDashboardUpdatingIds.includes(numericId)) return
+
+  const previousEnabled = record.dashboard_enabled !== false
+  const nextEnabled = !previousEnabled
+  state.metricDashboardUpdatingIds = [...state.metricDashboardUpdatingIds, numericId]
+  state.records.metrics = state.records.metrics.map((item) => Number(item.id) === numericId
+    ? { ...item, dashboard_enabled: nextEnabled }
+    : item)
+  renderManagement('metrics')
+
+  try {
+    if (state.backendOnline && state.recordsFromApi.metrics) {
+      const saved = await apiRequest(`/api/admin/metrics/${numericId}/dashboard-enabled`, {
+        method: 'PATCH',
+        body: JSON.stringify({ dashboard_enabled: nextEnabled }),
+        timeout: 15000
+      })
+      state.records.metrics = state.records.metrics.map((item) => Number(item.id) === numericId ? saved : item)
+      invalidateDashboardConfiguration()
+      toast(nextEnabled ? '该指标已用于看板' : '该指标已从看板移除', 'success')
+      if (['dashboard', 'reports'].includes(state.view)) await loadDashboardContext(false, true)
+    } else {
+      invalidateDashboardConfiguration()
+      toast('预览状态已更新，启动后端后可保存真实配置', 'warning')
+    }
+  } catch (error) {
+    state.records.metrics = state.records.metrics.map((item) => Number(item.id) === numericId
+      ? { ...item, dashboard_enabled: previousEnabled }
+      : item)
+    toast(error.message || '看板状态更新失败，已恢复原状态', 'error', 5000)
+  } finally {
+    state.metricDashboardUpdatingIds = state.metricDashboardUpdatingIds.filter((id) => id !== numericId)
+    if (state.view === 'metrics') renderManagement('metrics')
+  }
 }
 
 async function loadKnowledgeStatus() {

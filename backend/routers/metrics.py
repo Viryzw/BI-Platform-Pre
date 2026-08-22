@@ -90,6 +90,22 @@ def update_metric(metric_id: int, metric: schemas.MetricUpdate, db: Session = De
     _sync_knowledge_base()
     return db_metric
 
+
+@router.patch("/{metric_id}/dashboard-enabled", response_model=schemas.MetricResponse)
+def update_metric_dashboard_enabled(
+    metric_id: int,
+    payload: schemas.MetricDashboardUpdate,
+    db: Session = Depends(get_db),
+):
+    db_metric = crud.update_metric_dashboard_enabled(
+        db,
+        metric_id,
+        payload.dashboard_enabled,
+    )
+    if db_metric is None:
+        raise HTTPException(status_code=404, detail="Metric not found")
+    return db_metric
+
 @router.delete("/{metric_id}", response_model=dict)
 def delete_metric(metric_id: int, db: Session = Depends(get_db)):
     success = crud.delete_metric(db, metric_id)
