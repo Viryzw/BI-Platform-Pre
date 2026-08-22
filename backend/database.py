@@ -8,7 +8,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # MySQL 连接 URL（请替换为你的实际用户名、密码、主机、端口、数据库名）
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "mysql+pymysql://root@localhost:3306/bi_platform?charset=utf8mb4",
+    "mysql+pymysql://root:050429@localhost:3306/bi_platform?charset=utf8mb4",
 )
 
 engine = create_engine(

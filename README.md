@@ -13,6 +13,45 @@ cd D:\bi_plantform\bi_plantform\backend
 python main.py
 ```
 
+## 服务器部署
+
+生产环境不要把本机开发密码写进代码，至少通过环境变量提供数据库、密钥和运行配置：
+
+```powershell
+$env:DATABASE_URL = "mysql+pymysql://bi_user:你的密码@127.0.0.1:3306/bi_platform?charset=utf8mb4"
+$env:AUTH_SECRET = "替换为稳定的随机字符串"
+$env:ATLAS_SECRET_KEY = "替换为稳定的独立随机字符串"
+$env:HOST = "0.0.0.0"
+$env:PORT = "8000"
+$env:APP_RELOAD = "false"
+python main.py
+```
+
+如果后端和前端部署在同一台服务器，也可以直接由 FastAPI 托管前端构建产物：
+
+```powershell
+$env:FRONTEND_DIR = "D:\py items\BI-Platform-Pre\frontend\dist"
+python main.py
+```
+
+前端与后端分开域名部署时，设置允许的前端来源：
+
+```powershell
+$env:CORS_ALLOWED_ORIGINS = "https://bi.example.com"
+```
+
+后端默认会托管仓库内的 `frontend/dist`，因此部署前需要先构建前端：
+
+```powershell
+cd frontend
+npm install
+npm run build
+```
+
+知识库需要本地嵌入模型。将模型目录放到 `backend/models/all-MiniLM-L6-v2`，
+或设置 `EMBEDDING_MODEL_PATH` 指向模型目录；Chroma 持久化目录可用
+`KNOWLEDGE_BASE_DIR` 指定。
+
 如果 MySQL 的 `root` 账号有密码，先配置连接地址：
 
 ```powershell

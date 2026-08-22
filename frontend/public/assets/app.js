@@ -178,6 +178,7 @@ const state = {
   view: 'dashboard',
   backendOnline: false,
   backendChecked: false,
+  backendHealthFailures: 0,
   dashboard: structuredClone(demoDashboard),
   dashboardIsDemo: true,
   dashboardError: '',
@@ -500,6 +501,9 @@ async function apiRequest(path, options = {}) {
       const stage = typeof detail === 'object' && detail.stage ? `（${detail.stage}）` : ''
       throw new Error(`${detailMessage || `请求失败（${response.status}）`}${stage}`)
     }
+    if (path.startsWith('/api/') && !state.backendOnline) {
+      setBackendStatus(true)
+    }
     return payload
   } catch (error) {
     if (error.name === 'AbortError') {
@@ -533,6 +537,7 @@ async function streamAgentRequest(payload, onStage) {
       const body = await response.json().catch(() => ({}))
       throw new Error(body?.detail?.message || body?.detail || `请求失败（${response.status}）`)
     }
+    if (!state.backendOnline) setBackendStatus(true)
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -571,38 +576,54 @@ function setBackendStatus(online) {
   backendStatus.title = online ? 'FastAPI 服务运行正常' : '当前使用前端样例数据，启动后端后可自动连接'
 }
 
+async function probeBackend() {
+  const candidates = [
+    ['/api/health/live', { timeout: 3500 }],
+    ['/__backend_health', { timeout: 3500 }],
+  ]
+  let lastError = null
+  for (const [path, options] of candidates) {
+    try {
+      await apiRequest(path, options)
+      return { online: true, status: 200, target: 'fastapi' }
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError || new Error('后端健康检查失败')
+}
+
 async function checkBackend({ refreshView = false } = {}) {
+  const previousOnline = state.backendOnline
+  let online = previousOnline
   try {
-    const result = await apiRequest('/__backend_health', { timeout: 3500 })
-    const changed = state.backendOnline !== Boolean(result.online)
-    setBackendStatus(Boolean(result.online))
-    if (refreshView || changed) {
-      if (['dashboard', 'reports'].includes(state.view) && state.backendOnline) await loadDashboardContext()
-      else if (managementConfig[state.view] && state.backendOnline) {
-        if (state.view === 'enterprises') await loadEnterpriseManagement()
-        else await loadRecords(state.view)
-        if (state.view === 'metrics') {
-          await loadKnowledgeStatus()
-          await loadKnowledgeDocuments()
-        }
-        if (state.view === 'datasources') {
-          await loadEnterprises()
-          await loadLatestDataSourceImportJob()
-        }
-      }
-      else if (state.view === 'chat' && state.backendOnline) await loadChatConfiguration()
-      else if (state.view === 'history' && state.backendOnline) await loadConversations({ rerender: true })
-      else renderCurrentView()
-    }
+    const result = await probeBackend()
+    online = Boolean(result.online)
+    state.backendHealthFailures = 0
   } catch {
-    setBackendStatus(false)
-    if (['dashboard', 'reports'].includes(state.view)) {
-      state.dashboard = structuredClone(demoDashboard)
-      state.dashboardIsDemo = true
-      state.dashboardError = '后台错误，当前为样例数据，请及时修复'
-      renderCurrentView()
+    state.backendHealthFailures += 1
+    online = state.backendHealthFailures >= 2 ? false : state.backendOnline
+  }
+
+  setBackendStatus(online)
+  const changed = previousOnline !== online
+  if (refreshView || changed) {
+    if (['dashboard', 'reports'].includes(state.view) && state.backendOnline) await loadDashboardContext()
+    else if (managementConfig[state.view] && state.backendOnline) {
+      if (state.view === 'enterprises') await loadEnterpriseManagement()
+      else await loadRecords(state.view)
+      if (state.view === 'metrics') {
+        await loadKnowledgeStatus()
+        await loadKnowledgeDocuments()
+      }
+      if (state.view === 'datasources') {
+        await loadEnterprises()
+        await loadLatestDataSourceImportJob()
+      }
     }
-    else if (refreshView) renderCurrentView()
+    else if (state.view === 'chat' && state.backendOnline) await loadChatConfiguration()
+    else if (state.view === 'history' && state.backendOnline) await loadConversations({ rerender: true })
+    else renderCurrentView()
   }
 }
 
@@ -622,7 +643,7 @@ function pageHeading(title, description, actions = '', className = '') {
   `
 }
 
-function activateView(view, updateHash = true) {
+async function activateView(view, updateHash = true) {
   if (!state.authToken || !state.currentUser) {
     renderLogin()
     return
@@ -642,6 +663,7 @@ function activateView(view, updateHash = true) {
   })
   closeSidebar()
   if (updateHash) history.replaceState(null, '', `#${view}`)
+  if (!state.backendOnline) await checkBackend({ refreshView: false })
   renderCurrentView()
 
   if (['dashboard', 'reports'].includes(view) && state.backendOnline) loadDashboardContext()
@@ -1492,7 +1514,7 @@ async function loadChatConfiguration() {
 
 async function saveLlmConfiguration(event) {
   event.preventDefault()
-  if (!state.backendOnline || state.llmConfigLoading) return
+  if (state.llmConfigLoading) return
   const input = document.querySelector('#api-key-input')
   const apiKey = input?.value.trim() || ''
   if (!apiKey) {
@@ -1508,6 +1530,7 @@ async function saveLlmConfiguration(event) {
       body: JSON.stringify({ user_id: state.currentUserId, api_key: apiKey }),
       timeout: 20000
     })
+    if (!state.backendOnline) setBackendStatus(true)
     clearDashboardCache()
     if (input) input.value = ''
     toast(wasConfigured ? 'API Key 已更新，后端配置已刷新' : 'API Key 已配置，后端配置已刷新', 'success')
@@ -2878,7 +2901,7 @@ async function activateImportedDataSource(job) {
 }
 
 async function loadLatestDataSourceImportJob() {
-  if (!state.backendOnline || !state.currentUserId) return
+  if (!state.currentUserId) return
   try {
     const job = await apiRequest('/api/admin/data_sources/import-jobs/latest', { timeout: 10000 })
     if (job.status === 'cancelled') {
@@ -3133,7 +3156,7 @@ function renderManagement(entity) {
     return
   }
   const config = managementConfig[entity]
-  const isPreview = !state.backendOnline || !state.recordsFromApi[entity]
+  const isPreview = !state.recordsFromApi[entity]
   const knowledgeAction = entity === 'metrics'
     ? `<button class="button" type="button" id="create-knowledge-document">＋ 新增字典 / 规则</button><button class="button" type="button" id="rebuild-knowledge" ${state.rebuildingKnowledge ? 'disabled' : ''}>${state.rebuildingKnowledge ? '正在重建…' : '重建知识库'}</button>`
     : ''
@@ -3190,13 +3213,10 @@ function renderManagement(entity) {
   document.querySelector('#rebuild-knowledge')?.addEventListener('click', rebuildKnowledgeBase)
   document.querySelector('#reload-records')?.addEventListener('click', async () => {
     await checkBackend()
-    if (state.backendOnline) {
-      if (entity === 'enterprises') await loadEnterpriseManagement(true)
-      else await loadRecords(entity, true)
-      if (entity === 'metrics') await loadKnowledgeStatus()
-      if (entity === 'datasources') await loadEnterprises()
-    }
-    else toast('后端尚未启动，当前保留样例记录', 'warning')
+    if (entity === 'enterprises') await loadEnterpriseManagement(true)
+    else await loadRecords(entity, true)
+    if (entity === 'metrics') await loadKnowledgeStatus()
+    if (entity === 'datasources') await loadEnterprises()
   })
   document.querySelectorAll('[data-edit-entity]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -3311,7 +3331,7 @@ async function toggleMetricDashboard(metricId) {
   renderManagement('metrics')
 
   try {
-    if (state.backendOnline && state.recordsFromApi.metrics) {
+    if (state.recordsFromApi.metrics) {
       const saved = await apiRequest(`/api/admin/metrics/${numericId}/dashboard-enabled`, {
         method: 'PATCH',
         body: JSON.stringify({ dashboard_enabled: nextEnabled }),
@@ -3671,7 +3691,7 @@ async function saveRecord(event, entity, existing, fields = fieldsForEntity(enti
   event.preventDefault()
   const config = managementConfig[entity]
   const payload = formPayload(event.currentTarget, fields, existing)
-  const sourceIsApi = state.backendOnline && state.recordsFromApi[entity]
+  const sourceIsApi = state.recordsFromApi[entity]
 
   try {
     if (sourceIsApi) {
@@ -3731,7 +3751,7 @@ async function deleteRecord(entity, id) {
   if (!window.confirm(`确定删除“${record.name || record.username || id}”吗？`)) return
 
   try {
-    if (state.backendOnline && state.recordsFromApi[entity]) {
+    if (state.recordsFromApi[entity]) {
       await apiRequest(`${managementConfig[entity].endpoint}${id}`, { method: 'DELETE', timeout: 15000 })
       toast(entity === 'metrics' ? '指标已删除，知识库已同步' : '记录已从后端删除', 'success')
       if (entity === 'metrics') await loadKnowledgeStatus()
@@ -3813,7 +3833,7 @@ async function performDataSourceDeletion(record, mode) {
     actionButton.textContent = mode === 'full' ? '正在删除…' : '正在取消…'
   }
   try {
-    if (state.backendOnline && state.recordsFromApi.datasources) {
+    if (state.recordsFromApi.datasources) {
       const result = await apiRequest(
         `${managementConfig.datasources.endpoint}${record.id}?mode=${mode}`,
         { method: 'DELETE', timeout: mode === 'full' ? 120000 : 30000 }

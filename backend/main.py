@@ -1,4 +1,8 @@
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, ensure_database_exists
 from routers import enterprises, data_sources, metrics, users, knowledge
 from routers import query
@@ -10,12 +14,39 @@ from routers import reports
 from routers import auth, departments, audit_logs
 from audit import AuditMiddleware
 from sqlalchemy import text
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 from knowledge_base import build_knowledge_base, get_knowledge_base_status
 from contextlib import asynccontextmanager
 from schema_migrations import run_schema_migrations
 from data_source_import import abort_unfinished_data_source_imports
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_frontend_dir() -> Path | None:
+    configured = os.getenv("FRONTEND_DIR", "").strip()
+    if configured:
+        candidate = Path(configured)
+        return candidate if candidate.is_dir() else None
+    candidate = PROJECT_ROOT / "frontend" / "dist"
+    return candidate if candidate.is_dir() else None
+
+
+FRONTEND_DIR = _resolve_frontend_dir()
+
+
+def _warn_deployment_defaults() -> None:
+    if not os.getenv("DATABASE_URL"):
+        print("⚠️ 未设置 DATABASE_URL，使用源码默认数据库连接；生产环境必须通过环境变量配置")
+    if not os.getenv("AUTH_SECRET") and not os.getenv("ATLAS_SECRET_KEY"):
+        print("⚠️ 未设置 AUTH_SECRET / ATLAS_SECRET_KEY，使用开发默认密钥；生产环境必须配置稳定密钥")
+
+
+_warn_deployment_defaults()
+
 
 # 首次部署时先创建平台管理库，再创建业务管理表。
 database_created = ensure_database_exists()
@@ -51,6 +82,20 @@ app = FastAPI(
 )
 app.add_middleware(AuditMiddleware)
 
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials="*" not in cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 # 注册路由
 app.include_router(enterprises.router)
 app.include_router(data_sources.router)
@@ -69,11 +114,39 @@ app.include_router(audit_logs.router)
 
 @app.get("/")
 def root():
+    if FRONTEND_DIR and (FRONTEND_DIR / "index.html").is_file():
+        return FileResponse(
+            FRONTEND_DIR / "index.html",
+            headers={"Cache-Control": "no-store"},
+        )
     return {"message": "BI Platform Admin API is running"}
+
+
+@app.get("/favicon.svg")
+def favicon():
+    if FRONTEND_DIR:
+        candidate = FRONTEND_DIR / "favicon.svg"
+        if candidate.is_file():
+            return FileResponse(candidate)
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
+@app.get("/icons.svg")
+def icons():
+    if FRONTEND_DIR:
+        candidate = FRONTEND_DIR / "icons.svg"
+        if candidate.is_file():
+            return FileResponse(candidate)
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
 
 @app.get("/health/live")
 def liveness():
+    return {"status": "ok"}
+
+
+@app.get("/api/health/live")
+def api_liveness():
     return {"status": "ok"}
 
 
@@ -95,6 +168,18 @@ def readiness():
             content={"status": "degraded", "database": "error", "message": str(exc)},
         )
 
+
+if FRONTEND_DIR:
+    assets_dir = FRONTEND_DIR / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8000")),
+        reload=os.getenv("APP_RELOAD", "false").lower() in {"1", "true", "yes"},
+    )
    
