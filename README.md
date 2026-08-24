@@ -1,123 +1,42 @@
-# Atlas BI 启动说明
 
-## Windows 后端
 
-确保 MySQL 服务已经启动。首次运行时，后端会自动创建平台管理数据库
-`bi_platform` 以及所需数据表，不需要手工执行建库 SQL。
 
-在 PowerShell 中执行：
 
-```powershell
+
+
+
+
+环境准备
+
+```bash
+conda create -n BI python=3.12
 conda activate BI
-cd D:\bi_plantform\bi_plantform\backend
+pip install -r requirements.txt
+```
+
+
+
+启动后端
+
+```bash
+conda activate BI
+cd backend/
 python main.py
 ```
 
-## 服务器部署
 
-生产环境不要把本机开发密码写进代码，至少通过环境变量提供数据库、密钥和运行配置：
 
-```powershell
-$env:DATABASE_URL = "mysql+pymysql://bi_user:你的密码@127.0.0.1:3306/bi_platform?charset=utf8mb4"
-$env:AUTH_SECRET = "替换为稳定的随机字符串"
-$env:ATLAS_SECRET_KEY = "替换为稳定的独立随机字符串"
-$env:HOST = "0.0.0.0"
-$env:PORT = "8000"
-$env:APP_RELOAD = "false"
-python main.py
-```
+启动前端
 
-如果后端和前端部署在同一台服务器，也可以直接由 FastAPI 托管前端构建产物：
-
-```powershell
-$env:FRONTEND_DIR = "D:\py items\BI-Platform-Pre\frontend\dist"
-python main.py
-```
-
-前端与后端分开域名部署时，设置允许的前端来源：
-
-```powershell
-$env:CORS_ALLOWED_ORIGINS = "https://bi.example.com"
-```
-
-后端默认会托管仓库内的 `frontend/dist`，因此部署前需要先构建前端：
-
-```powershell
-cd frontend
+```bash
 npm install
-npm run build
-```
-
-知识库需要本地嵌入模型。将模型目录放到 `backend/models/all-MiniLM-L6-v2`，
-或设置 `EMBEDDING_MODEL_PATH` 指向模型目录；Chroma 持久化目录可用
-`KNOWLEDGE_BASE_DIR` 指定。
-
-如果 MySQL 的 `root` 账号有密码，先配置连接地址：
-
-```powershell
-$env:DATABASE_URL = "mysql+pymysql://root:你的密码@127.0.0.1:3306/bi_platform?charset=utf8mb4"
-python main.py
-```
-
-用于 `DATABASE_URL` 的账号首次启动时需要具有 `CREATE DATABASE` 权限。
-数据库创建完成后，后端会继续自动建表和执行结构迁移。
-
-第一次打开登录页时，如果系统还没有任何用户，页面会显示“注册首个管理员”。
-首个账号创建成功后公开注册自动关闭，其他账号由管理员在“用户管理”中创建。
-
-如果无法使用注册页面，也可以先生成密码哈希：
-
-```powershell
-cd D:\bi_plantform\bi_plantform\backend
-python -c "from security import hash_password; print(hash_password('替换为你的密码'))"
-```
-
-复制输出的完整哈希，然后在 MySQL 中创建管理员：
-
-```sql
-USE bi_platform;
-INSERT INTO users (username, password, role)
-VALUES ('admin', '粘贴上一步生成的完整哈希', 'admin');
-```
-
-## macOS 后端
-
-```bash
-cd /Users/wayne/Documents/Projects/bi_plantform/backend
-conda run -n BI python main.py
-```
-
-DeepSeek API Key 由每个用户在“智能问数”页面配置，不要写入 README 或前端代码。
-正式环境启动前请配置稳定的 `AUTH_SECRET` 和 `ATLAS_SECRET_KEY`，不要使用开发默认值。
-
-本机 MySQL 新数据源会使用平台管理连接自动校验并补充目标库的 `SELECT` 权限。
-远程 MySQL 如需自动授权，请只在后端进程中配置管理员连接和后端来源主机：
-
-```bash
-export DATA_SOURCE_ADMIN_URL="mysql+pymysql://admin:password@db-host:3306/mysql"
-export DATA_SOURCE_READER_HOST="10.0.0.20"
-```
-
-管理员凭据不得提交到代码仓库或填写到前端数据源表单。
-
-```bash
-cd /Users/wayne/Documents/Projects/bi_plantform/frontend-macos
-node server.mjs
-```
-
-浏览器访问：`http://127.0.0.1:5173/`
-
-Vite 版以 macOS 版为只读模板，可通过以下命令单向同步并启动：
-
-```bash
-cd /Users/wayne/Documents/Projects/bi_plantform/frontend
 npm run dev
 ```
 
 
 
-启动sql
+本地访问前端 127.0.0.1:5173
 
-```bash
-mysql -h 127.0.0.1 -P 3306 -u root
-```
+服务器部署 http://120.26.215.115
+
+root 123456
